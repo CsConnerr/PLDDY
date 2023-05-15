@@ -1,11 +1,12 @@
 # PLDDY
 
 Plan to Study
-## Description 
+
+## Description
 
 Plan out your daily tasks and let PLDDY generate times for you to study!
 
-Main Dart code located in Lib Folder! 
+!Main Dart code located in Lib Folder!
 
 ## Links
 
