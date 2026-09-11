@@ -1,0 +1,26 @@
+name: Package PLDDY improved source
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out improved planner branch
+        uses: actions/checkout@v4
+        with:
+          ref: improve-smart-planner
+
+      - name: Create source zip
+        run: |
+          zip -r PLDDY-improved-full.zip . -x '.git/*'
+
+      - name: Upload source zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLDDY-improved-full
+          path: PLDDY-improved-full.zip
+          if-no-files-found: error
