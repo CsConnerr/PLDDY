@@ -170,7 +170,7 @@ class SmartPlanner {
     final int taskMinutes = end.difference(start).inMinutes;
     final int breathingRoom = freeWindowMinutes - taskMinutes;
     if (breathingRoom > 0) {
-      score += breathingRoom.clamp(0, 180) * 1.2;
+      score += breathingRoom.clamp(0, 180).toDouble() * 1.2;
     }
 
     if (start.minute == 0 || start.minute == 30) {
