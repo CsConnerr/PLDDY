@@ -19,7 +19,32 @@ class PlannerSuggestion {
   });
 }
 
+class PlannerRequest {
+  final ActivityType activity;
+  final int durationMinutes;
+
+  const PlannerRequest({
+    required this.activity,
+    required this.durationMinutes,
+  });
+}
+
+class PlannedActivity {
+  final ActivityType activity;
+  final int durationMinutes;
+  final PlannerSuggestion suggestion;
+
+  const PlannedActivity({
+    required this.activity,
+    required this.durationMinutes,
+    required this.suggestion,
+  });
+}
+
 class SmartPlanner {
+  static const int defaultDayStartHour = 7;
+  static const int defaultDayEndHour = 23;
+
   static List<PlannerSuggestion> suggest({
     required DateTime day,
     required List<ScheduleBlock> busyBlocks,
@@ -27,11 +52,31 @@ class SmartPlanner {
     required ActivityType activity,
     int maxSuggestions = 4,
     int transitionBufferMinutes = 15,
+    int dayStartHour = defaultDayStartHour,
+    int dayEndHour = defaultDayEndHour,
     DateTime? now,
   }) {
+    if (durationMinutes <= 0 || maxSuggestions <= 0) {
+      return <PlannerSuggestion>[];
+    }
+
     final DateTime currentTime = now ?? DateTime.now();
-    final DateTime dayStart = DateTime(day.year, day.month, day.day, 7);
-    final DateTime dayEnd = DateTime(day.year, day.month, day.day, 23);
+    final DateTime dayStart = DateTime(
+      day.year,
+      day.month,
+      day.day,
+      dayStartHour,
+    );
+    final DateTime dayEnd = DateTime(
+      day.year,
+      day.month,
+      day.day,
+      dayEndHour,
+    );
+
+    if (!dayStart.isBefore(dayEnd)) {
+      return <PlannerSuggestion>[];
+    }
 
     DateTime earliestStart = dayStart;
     if (_isSameDay(day, currentTime)) {
@@ -41,28 +86,29 @@ class SmartPlanner {
       if (earliestStart.isBefore(dayStart)) {
         earliestStart = dayStart;
       }
+    } else if (_dayOnly(day).isBefore(_dayOnly(currentTime))) {
+      return <PlannerSuggestion>[];
     }
 
     if (!earliestStart.isBefore(dayEnd)) {
       return <PlannerSuggestion>[];
     }
 
-    final List<ScheduleBlock> bufferedBlocks = busyBlocks
-        .where((ScheduleBlock block) =>
-            block.start.isBefore(dayEnd) && block.end.isAfter(dayStart))
-        .map(
-          (ScheduleBlock block) => ScheduleBlock(
-            start: block.start.subtract(
-              Duration(minutes: transitionBufferMinutes),
+    final List<ScheduleBlock> bufferedBlocks = _mergeBlocks(
+      busyBlocks
+          .where(
+            (ScheduleBlock block) =>
+                block.start.isBefore(dayEnd) && block.end.isAfter(dayStart),
+          )
+          .map(
+            (ScheduleBlock block) => ScheduleBlock(
+              start: block.start
+                  .subtract(Duration(minutes: transitionBufferMinutes)),
+              end: block.end.add(Duration(minutes: transitionBufferMinutes)),
             ),
-            end: block.end.add(
-              Duration(minutes: transitionBufferMinutes),
-            ),
-          ),
-        )
-        .toList()
-      ..sort((ScheduleBlock a, ScheduleBlock b) =>
-          a.start.compareTo(b.start));
+          )
+          .toList(),
+    );
 
     final List<PlannerSuggestion> candidates = <PlannerSuggestion>[];
     DateTime candidateStart = earliestStart;
@@ -132,6 +178,141 @@ class SmartPlanner {
     return selected;
   }
 
+  static List<PlannedActivity> planDay({
+    required DateTime day,
+    required List<ScheduleBlock> busyBlocks,
+    required List<PlannerRequest> requests,
+    int transitionBufferMinutes = 15,
+    int dayStartHour = defaultDayStartHour,
+    int dayEndHour = defaultDayEndHour,
+    DateTime? now,
+  }) {
+    final List<ScheduleBlock> workingBusy = List<ScheduleBlock>.from(busyBlocks);
+    final List<PlannerRequest> pending = requests
+        .where((PlannerRequest request) => request.durationMinutes > 0)
+        .toList();
+    final List<PlannedActivity> planned = <PlannedActivity>[];
+
+    while (pending.isNotEmpty) {
+      PlannerRequest? requestToPlace;
+      List<PlannerSuggestion> bestOptions = <PlannerSuggestion>[];
+      int fewestOptions = 1 << 30;
+
+      for (final PlannerRequest request in pending) {
+        final List<PlannerSuggestion> options = suggest(
+          day: day,
+          busyBlocks: workingBusy,
+          durationMinutes: request.durationMinutes,
+          activity: request.activity,
+          maxSuggestions: 8,
+          transitionBufferMinutes: transitionBufferMinutes,
+          dayStartHour: dayStartHour,
+          dayEndHour: dayEndHour,
+          now: now,
+        );
+
+        if (options.isEmpty) {
+          continue;
+        }
+
+        final bool isMoreConstrained = options.length < fewestOptions;
+        final bool sameConstraintButLonger =
+            options.length == fewestOptions &&
+                requestToPlace != null &&
+                request.durationMinutes > requestToPlace.durationMinutes;
+
+        if (requestToPlace == null ||
+            isMoreConstrained ||
+            sameConstraintButLonger) {
+          requestToPlace = request;
+          bestOptions = options;
+          fewestOptions = options.length;
+        }
+      }
+
+      if (requestToPlace == null || bestOptions.isEmpty) {
+        break;
+      }
+
+      final PlannerSuggestion chosen = bestOptions.first;
+      planned.add(
+        PlannedActivity(
+          activity: requestToPlace.activity,
+          durationMinutes: requestToPlace.durationMinutes,
+          suggestion: chosen,
+        ),
+      );
+      workingBusy.add(
+        ScheduleBlock(start: chosen.start, end: chosen.end),
+      );
+      pending.remove(requestToPlace);
+    }
+
+    planned.sort(
+      (PlannedActivity a, PlannedActivity b) =>
+          a.suggestion.start.compareTo(b.suggestion.start),
+    );
+    return planned;
+  }
+
+  static int availableMinutes({
+    required DateTime day,
+    required List<ScheduleBlock> busyBlocks,
+    int dayStartHour = defaultDayStartHour,
+    int dayEndHour = defaultDayEndHour,
+    DateTime? now,
+  }) {
+    final DateTime currentTime = now ?? DateTime.now();
+    final DateTime dayStart = DateTime(
+      day.year,
+      day.month,
+      day.day,
+      dayStartHour,
+    );
+    final DateTime dayEnd = DateTime(
+      day.year,
+      day.month,
+      day.day,
+      dayEndHour,
+    );
+
+    if (_dayOnly(day).isBefore(_dayOnly(currentTime))) {
+      return 0;
+    }
+
+    DateTime windowStart = dayStart;
+    if (_isSameDay(day, currentTime) && currentTime.isAfter(windowStart)) {
+      windowStart = currentTime.isAfter(dayEnd) ? dayEnd : currentTime;
+    }
+
+    if (!windowStart.isBefore(dayEnd)) {
+      return 0;
+    }
+
+    final List<ScheduleBlock> clipped = busyBlocks
+        .where(
+          (ScheduleBlock block) =>
+              block.start.isBefore(dayEnd) && block.end.isAfter(windowStart),
+        )
+        .map(
+          (ScheduleBlock block) => ScheduleBlock(
+            start: block.start.isBefore(windowStart) ? windowStart : block.start,
+            end: block.end.isAfter(dayEnd) ? dayEnd : block.end,
+          ),
+        )
+        .toList();
+
+    final List<ScheduleBlock> merged = _mergeBlocks(clipped);
+    final int busyMinutes = merged.fold<int>(
+      0,
+      (int total, ScheduleBlock block) =>
+          total + block.end.difference(block.start).inMinutes,
+    );
+    final int totalMinutes = dayEnd.difference(windowStart).inMinutes;
+    final int available = totalMinutes - busyMinutes;
+    return available < 0 ? 0 : available;
+  }
+
   static double _scoreCandidate({
     required DateTime start,
     required DateTime end,
@@ -184,10 +365,8 @@ class SmartPlanner {
       if (start.hour < 8) {
         score -= 100;
       }
-    } else if (activity == ActivityType.workout) {
-      if (start.hour >= 21) {
-        score -= 150;
-      }
+    } else if (activity == ActivityType.workout && start.hour >= 21) {
+      score -= 150;
     }
 
     score -= start.difference(dayStart).inMinutes * 0.02;
@@ -205,6 +384,35 @@ class SmartPlanner {
     }
   }
 
+  static List<ScheduleBlock> _mergeBlocks(List<ScheduleBlock> blocks) {
+    if (blocks.isEmpty) {
+      return <ScheduleBlock>[];
+    }
+
+    final List<ScheduleBlock> sorted = List<ScheduleBlock>.from(blocks)
+      ..sort(
+        (ScheduleBlock a, ScheduleBlock b) => a.start.compareTo(b.start),
+      );
+    final List<ScheduleBlock> merged = <ScheduleBlock>[sorted.first];
+
+    for (int index = 1; index < sorted.length; index++) {
+      final ScheduleBlock current = sorted[index];
+      final ScheduleBlock previous = merged.last;
+      if (!current.start.isAfter(previous.end)) {
+        final DateTime laterEnd =
+            current.end.isAfter(previous.end) ? current.end : previous.end;
+        merged[merged.length - 1] = ScheduleBlock(
+          start: previous.start,
+          end: laterEnd,
+        );
+      } else {
+        merged.add(current);
+      }
+    }
+
+    return merged;
+  }
+
   static DateTime _roundUpToQuarterHour(DateTime value) {
     final DateTime minuteStart = DateTime(
       value.year,
@@ -218,6 +426,10 @@ class SmartPlanner {
       return minuteStart;
     }
     return minuteStart.add(Duration(minutes: 15 - remainder));
+  }
+
+  static DateTime _dayOnly(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
   }
 
   static bool _isSameDay(DateTime a, DateTime b) {
