@@ -63,5 +63,60 @@ void main() {
 
       expect(suggestions, isEmpty);
     });
+
+    test('builds a day plan without overlapping planned activities', () {
+      final DateTime day = DateTime(2026, 9, 10);
+      final List<PlannedActivity> plan = SmartPlanner.planDay(
+        day: day,
+        now: DateTime(2026, 9, 9, 12),
+        busyBlocks: <ScheduleBlock>[
+          ScheduleBlock(
+            start: DateTime(2026, 9, 10, 11),
+            end: DateTime(2026, 9, 10, 13),
+          ),
+          ScheduleBlock(
+            start: DateTime(2026, 9, 10, 17),
+            end: DateTime(2026, 9, 10, 18),
+          ),
+        ],
+        requests: const <PlannerRequest>[
+          PlannerRequest(activity: ActivityType.study, durationMinutes: 90),
+          PlannerRequest(activity: ActivityType.homework, durationMinutes: 60),
+          PlannerRequest(activity: ActivityType.workout, durationMinutes: 45),
+        ],
+      );
+
+      expect(plan.length, 3);
+      for (int first = 0; first < plan.length; first++) {
+        for (int second = first + 1; second < plan.length; second++) {
+          final PlannerSuggestion a = plan[first].suggestion;
+          final PlannerSuggestion b = plan[second].suggestion;
+          final bool overlaps = a.start.isBefore(b.end) && a.end.isAfter(b.start);
+          expect(overlaps, isFalse);
+        }
+      }
+    });
+
+    test('available minutes merges overlapping commitments', () {
+      final DateTime day = DateTime(2026, 9, 10);
+      final int available = SmartPlanner.availableMinutes(
+        day: day,
+        now: DateTime(2026, 9, 9, 12),
+        busyBlocks: <ScheduleBlock>[
+          ScheduleBlock(
+            start: DateTime(2026, 9, 10, 9),
+            end: DateTime(2026, 9, 10, 11),
+          ),
+          ScheduleBlock(
+            start: DateTime(2026, 9, 10, 10),
+            end: DateTime(2026, 9, 10, 12),
+          ),
+        ],
+      );
+
+      // The planning day is 16 hours long. The two commitments overlap and
+      // occupy only three unique hours, leaving thirteen hours open.
+      expect(available, 13 * 60);
+    });
   });
 }
